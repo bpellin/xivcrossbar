@@ -6,6 +6,7 @@ local icon_extractor = require('ui/icon_extractor')
 local kebab_casify = require('libs/kebab_casify')
 local crossbar_abilities = require('resources/crossbar_abilities')
 local crossbar_spells = require('resources/crossbar_spells')
+local crossbar_selector = require('crossbar_selector')
 
 texts = require('texts')
 
@@ -26,21 +27,6 @@ local maybe_get_custom_icon = function(default_icon, custom_icon)
     else
         return default_icon, false
     end
-end
-
-local left_trigger_lifted_during_doublepress_window = false
-local right_trigger_lifted_during_doublepress_window = false
-local is_left_doublepress_window_open = false
-local is_right_doublepress_window_open = false
-
-local function close_left_doublepress_window()
-    is_left_doublepress_window_open = false
-    left_trigger_lifted_during_doublepress_window = false
-end
-
-local function close_right_doublepress_window()
-    is_right_doublepress_window_open = false
-    right_trigger_lifted_during_doublepress_window = false
 end
 
 local states = {
@@ -146,7 +132,7 @@ local SPELL_TYPE_LOOKUP = {
     ['SummonerPact'] = 'summoning magic',
 }
 
-function action_binder:setup(buttonmapping, save_binding_func, delete_binding_func, theme_options, get_crossbar_sets_func, base_x, base_y, max_width, max_height)
+function action_binder:setup(buttonmapping, save_binding_func, delete_binding_func, theme_options, get_crossbar_sets_func, reset_doublepress_func, base_x, base_y, max_width, max_height)
     self.button_layout = buttonmapping.button_layout
     self.confirm_button = buttonmapping.confirm_button
     self.cancel_button = buttonmapping.cancel_button
@@ -155,6 +141,7 @@ function action_binder:setup(buttonmapping, save_binding_func, delete_binding_fu
     self.save_binding = save_binding_func
     self.delete_binding = delete_binding_func
     self.get_crossbar_sets_binding = get_crossbar_sets_func
+    self.reset_doublepress = reset_doublepress_func
     self.is_hidden = true
     self.selector = require('ui/selectablelist')
     self.selector:setup(theme_options, base_x + 50, base_y + 75, max_width - 100, max_height - 175)
@@ -205,6 +192,11 @@ function action_binder:setup(buttonmapping, save_binding_func, delete_binding_fu
 end
 
 function action_binder:reset_state()
+    if (self.reset_doublepress ~= nil) then
+        self.reset_doublepress()
+    end
+    self:reset_gamepad()
+
     self.state = states.HIDDEN
     self.action_type = nil
     self.action_name = nil
@@ -268,33 +260,16 @@ function action_binder:set_ui_offset_callback(update_offsets)
 end
 
 function action_binder:update_active_crossbar(left_trigger_just_pressed, right_trigger_just_pressed)
-    if (self.trigger_left_pressed and self.trigger_right_pressed) then
-        if (self.theme_options.hotbar_number > 3) then
-            if (left_trigger_just_pressed) then
-                -- R -> L = bar 3
-                self.active_crossbar = 3
-            elseif (right_trigger_just_pressed) then
-                -- L -> R = bar 4
-                self.active_crossbar = 4
-            end
-        else
-            self.active_crossbar = 3
-        end
-    elseif (self.trigger_left_pressed) then
-        if (self.theme_options.hotbar_number > 4 and self.trigger_left_doublepressed) then
-            self.active_crossbar = 5
-        else
-            self.active_crossbar = 1
-        end
-    elseif (self.trigger_right_pressed) then
-        if (self.theme_options.hotbar_number > 4 and self.trigger_right_doublepressed) then
-            self.active_crossbar = 6
-        else
-            self.active_crossbar = 2
-        end
-    else
-        self.active_crossbar = nil
-    end
+    self.active_crossbar = crossbar_selector.get_active_crossbar(
+        self.theme_options.hotbar_number,
+        self.trigger_left_pressed,
+        self.trigger_right_pressed,
+        left_trigger_just_pressed,
+        right_trigger_just_pressed,
+        self.trigger_left_doublepressed,
+        self.trigger_right_doublepressed,
+        self.active_crossbar,
+        nil)
 end
 
 function action_binder:dpad_left(pressed)
@@ -469,58 +444,22 @@ function action_binder:button_y(pressed)
     end
 end
 
-function action_binder:trigger_left(pressed)
+function action_binder:trigger_left(pressed, doublepressed)
     if (self.state == states.SELECT_BUTTON_ASSIGNMENT) then
         local just_pressed = pressed and not self.trigger_left_pressed
-        local just_released = self.trigger_left_pressed and not pressed
-        local only_left_trigger_just_pressed = just_pressed and not self.trigger_right_pressed
 
-        if (not is_left_doublepress_window_open and only_left_trigger_just_pressed) then
-            is_left_doublepress_window_open = true
-            is_right_doublepress_window_open = false
-            coroutine.schedule(close_left_doublepress_window, 0.5)
-        end
-        local only_left_trigger_just_released = just_released and not self.trigger_right_pressed
-        if (is_left_doublepress_window_open and only_left_trigger_just_released) then
-            left_trigger_lifted_during_doublepress_window = true
-        end
-        if (only_left_trigger_just_pressed and is_left_doublepress_window_open and left_trigger_lifted_during_doublepress_window) then
-            self.trigger_left_doublepressed = true
-            close_left_doublepress_window()
-        end
-        if (just_released and self.trigger_left_doublepressed) then
-            self.trigger_left_doublepressed = false
-        end
-
+        self.trigger_left_doublepressed = doublepressed == true
         self.trigger_left_pressed = pressed
         self:update_active_crossbar(just_pressed, false)
         self:show_pressed_buttons()
     end
 end
 
-function action_binder:trigger_right(pressed)
+function action_binder:trigger_right(pressed, doublepressed)
     if (self.state == states.SELECT_BUTTON_ASSIGNMENT) then
         local just_pressed = pressed and not self.trigger_right_pressed
-        local just_released = self.trigger_right_pressed and not pressed
-        local only_right_trigger_just_pressed = just_pressed and not self.trigger_left_pressed
 
-        if (not is_right_doublepress_window_open and only_right_trigger_just_pressed) then
-            is_right_doublepress_window_open = true
-            is_left_doublepress_window_open = false
-            coroutine.schedule(close_right_doublepress_window, 0.5)
-        end
-        local only_right_trigger_just_released = just_released and not self.trigger_left_pressed
-        if (is_right_doublepress_window_open and only_right_trigger_just_released) then
-            right_trigger_lifted_during_doublepress_window = true
-        end
-        if (only_right_trigger_just_pressed and is_right_doublepress_window_open and right_trigger_lifted_during_doublepress_window) then
-            self.trigger_right_doublepressed = true
-            close_right_doublepress_window()
-        end
-        if (just_released and self.trigger_right_doublepressed) then
-            self.trigger_right_doublepressed = false
-        end
-
+        self.trigger_right_doublepressed = doublepressed == true
         self.trigger_right_pressed = pressed
         self:update_active_crossbar(false, just_pressed)
         self:show_pressed_buttons()
@@ -927,6 +866,9 @@ function action_binder:display_button_assigner()
     self.title:show()
 
     self:reset_gamepad()
+    if (self.reset_doublepress ~= nil) then
+        self.reset_doublepress()
+    end
 
     self.selector:hide()
 

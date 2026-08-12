@@ -70,6 +70,8 @@ local consumables = require('consumables')
 local gamepad_mapper = require('gamepad_mapper')
 local gamepad_converter = require('gamepad_converter')
 local function_key_bindings = require('function_key_bindings')
+local crossbar_selector = require('crossbar_selector')
+local doublepress_tracker = require('doublepress_tracker')
 
 -----------------------------
 -- Main
@@ -83,19 +85,14 @@ gamepad_state.right_trigger_doublepress = false
 gamepad_state.active_bar = 0
 local shift_pressed = false
 local ui_dirty = false
-local left_trigger_lifted_during_doublepress_window = false
-local right_trigger_lifted_during_doublepress_window = false
-local is_left_doublepress_window_open = false
-local is_right_doublepress_window_open = false
+local trigger_doublepress = doublepress_tracker.new(function(callback, delay)
+    coroutine.schedule(callback, delay)
+end, 0.5)
 
-local function close_left_doublepress_window()
-    is_left_doublepress_window_open = false
-    left_trigger_lifted_during_doublepress_window = false
-end
-
-local function close_right_doublepress_window()
-    is_right_doublepress_window_open = false
-    right_trigger_lifted_during_doublepress_window = false
+local function reset_doublepress_state()
+    trigger_doublepress:reset()
+    gamepad_state.left_trigger_doublepress = false
+    gamepad_state.right_trigger_doublepress = false
 end
 
 -- command to set a crossbar action in action_binder
@@ -178,7 +175,7 @@ function initialize()
 
     if (buttonmapping.validate()) then
         theme_options.button_layout = buttonmapping.button_layout
-        action_binder:setup(buttonmapping, set_hotkey, delete_hotkey, theme_options, get_crossbar_sets, 150, 150, windower.get_windower_settings().ui_x_res - 300, windower.get_windower_settings().ui_y_res - y_adjust)
+        action_binder:setup(buttonmapping, set_hotkey, delete_hotkey, theme_options, get_crossbar_sets, reset_doublepress_state, 150, 150, windower.get_windower_settings().ui_x_res - 300, windower.get_windower_settings().ui_y_res - y_adjust)
     else
         theme_options.button_layout = 'nintendo'
         local temp_buttonmapping = {}
@@ -188,7 +185,7 @@ function initialize()
         theme_options.activewindow_button = 'x'
         gamepad_mapper:setup(buttonmapping, start_controller_wrappers, theme_options, 150, 150, windower.get_windower_settings().ui_x_res - 300, windower.get_windower_settings().ui_y_res - y_adjust)
         gamepad_mapper:show(true)
-        action_binder:setup(temp_buttonmapping, set_hotkey, delete_hotkey, theme_options, get_crossbar_sets, 150, 150, windower.get_windower_settings().ui_x_res - 300, windower.get_windower_settings().ui_y_res - y_adjust)
+        action_binder:setup(temp_buttonmapping, set_hotkey, delete_hotkey, theme_options, get_crossbar_sets, reset_doublepress_state, 150, 150, windower.get_windower_settings().ui_x_res - 300, windower.get_windower_settings().ui_y_res - y_adjust)
     end
 
     player:initialize(windower_player, server, theme_options, enchanted_items)
@@ -652,43 +649,14 @@ windower.register_event('keyboard', function(dik, pressed, flags, blocked)
         gamepad_state.plus_button = pressed
     end
 
-    local only_left_trigger_just_pressed = left_trigger_just_pressed and not gamepad_state.right_trigger
-    if (not is_left_doublepress_window_open and only_left_trigger_just_pressed) then
-        is_left_doublepress_window_open = true
-        is_right_doublepress_window_open = false
-        coroutine.schedule(close_left_doublepress_window, 0.5)
-    end
-    local only_right_trigger_just_pressed = right_trigger_just_pressed and not gamepad_state.left_trigger
-    if (not is_right_doublepress_window_open and only_right_trigger_just_pressed) then
-        is_right_doublepress_window_open = true
-        is_left_doublepress_window_open = false
-        coroutine.schedule(close_right_doublepress_window, 0.5)
-    end
-
-    local only_left_trigger_just_released = left_trigger_just_released and not gamepad_state.right_trigger
-    if (is_left_doublepress_window_open and only_left_trigger_just_released) then
-        left_trigger_lifted_during_doublepress_window = true
-    end
-    local only_right_trigger_just_released = right_trigger_just_released and not gamepad_state.left_trigger
-    if (is_right_doublepress_window_open and only_right_trigger_just_released) then
-        right_trigger_lifted_during_doublepress_window = true
-    end
-
-    if (only_left_trigger_just_pressed and is_left_doublepress_window_open and left_trigger_lifted_during_doublepress_window) then
-        gamepad_state.left_trigger_doublepress = true
-        is_left_doublepress_window_open = false
-    end
-    if (only_right_trigger_just_pressed and is_right_doublepress_window_open and right_trigger_lifted_during_doublepress_window) then
-        gamepad_state.right_trigger_doublepress = true
-        is_right_doublepress_window_open = false
-    end
-
-    if (left_trigger_just_released and gamepad_state.left_trigger_doublepress) then
-        gamepad_state.left_trigger_doublepress = false
-    end
-    if (right_trigger_just_released and gamepad_state.right_trigger_doublepress) then
-        gamepad_state.right_trigger_doublepress = false
-    end
+    gamepad_state.left_trigger_doublepress, gamepad_state.right_trigger_doublepress =
+        trigger_doublepress:update(
+            left_trigger_just_pressed,
+            left_trigger_just_released,
+            right_trigger_just_pressed,
+            right_trigger_just_released,
+            gamepad_state.left_trigger,
+            gamepad_state.right_trigger)
 
     -- windower.send_command('@input /echo '..dik)
 
@@ -727,40 +695,23 @@ windower.register_event('keyboard', function(dik, pressed, flags, blocked)
         return true
     end
 
-    if (gamepad_state.capturing and gamepad_state.left_trigger and not gamepad_state.right_trigger) then
-        if (gamepad_state.left_trigger_doublepress and theme_options.hotbar_number >= 5) then
-            change_active_hotbar(5)
-            gamepad_state.active_bar = 5
-        else
-            change_active_hotbar(1)
-            gamepad_state.active_bar = 1
-        end
-    elseif (gamepad_state.capturing and gamepad_state.right_trigger and not gamepad_state.left_trigger) then
-        if (gamepad_state.right_trigger_doublepress and theme_options.hotbar_number >= 6) then
-            change_active_hotbar(6)
-            gamepad_state.active_bar = 6
-        else
-            change_active_hotbar(2)
-            gamepad_state.active_bar = 2
-        end
-    elseif (gamepad_state.capturing and gamepad_state.right_trigger and gamepad_state.left_trigger) then
-        if (theme_options.hotbar_number > 3) then
-            if (left_trigger_just_pressed) then
-                -- R -> L = bar 3
-                change_active_hotbar(3)
-                gamepad_state.active_bar = 3
-            elseif (right_trigger_just_pressed) then
-                -- L -> R = bar 4
-                change_active_hotbar(4)
-                gamepad_state.active_bar = 4
-            end
-        else
-            change_active_hotbar(3)
-            gamepad_state.active_bar = 3
-        end
-    else
-        gamepad_state.active_bar = 0
+    local next_active_bar = 0
+    if (gamepad_state.capturing) then
+        next_active_bar = crossbar_selector.get_active_crossbar(
+            theme_options.hotbar_number,
+            gamepad_state.left_trigger,
+            gamepad_state.right_trigger,
+            left_trigger_just_pressed,
+            right_trigger_just_pressed,
+            gamepad_state.left_trigger_doublepress,
+            gamepad_state.right_trigger_doublepress,
+            gamepad_state.active_bar,
+            0)
     end
+    if (next_active_bar > 0) then
+        change_active_hotbar(next_active_bar)
+    end
+    gamepad_state.active_bar = next_active_bar
 
     if (not gamepad_mapper.is_showing and gamepad_state.capturing and gamepad.is_minus(dik) and pressed) then
         if (action_binder.is_hidden) then
@@ -824,9 +775,9 @@ windower.register_event('keyboard', function(dik, pressed, flags, blocked)
             end
 
             if (gamepad.is_left_trigger(dik)) then
-                action_binder:trigger_left(pressed)
+                action_binder:trigger_left(pressed, gamepad_state.left_trigger_doublepress)
             elseif (gamepad.is_right_trigger(dik)) then
-                action_binder:trigger_right(pressed)
+                action_binder:trigger_right(pressed, gamepad_state.right_trigger_doublepress)
             end
         end
     end
