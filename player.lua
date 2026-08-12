@@ -133,39 +133,74 @@ end
 -- load hotbar for current player and job combination
 function player:load_hotbar()
     self:update_current_spells()
+    local sources = {
+        {file = storage.file, message = '[XIVCrossbar] Load crossbar sets for ' .. storage.filename},
+        {file = storage.job_default_file, message = '[XIVCrossbar] Load cross-subjob fallback crossbar set for ' .. player.main_job},
+        {file = storage.all_jobs_file, message = '[XIVCrossbar] Load cross-job fallback crossbar set'},
+    }
+    local parsed_sources = {}
+
+    -- Read and parse every existing file before clearing the active hotbars. A
+    -- transient filesystem failure must not replace good in-memory data.
+    for index, source in ipairs(sources) do
+        if source.file:exists() then
+            local succeeded, contents, read_error = pcall(xml.read, source.file)
+            if not succeeded then
+                local message = 'Unable to read ' .. source.file.path .. ': ' .. tostring(contents)
+                windower.console.write('[XIVCrossbar] ' .. message)
+                return nil, message
+            elseif contents == nil then
+                local message = 'Unable to parse ' .. source.file.path .. ': ' .. tostring(read_error)
+                windower.console.write('[XIVCrossbar] ' .. message)
+                return nil, message
+            elseif contents.name ~= 'hotbar' then
+                local message = 'Invalid hotbar XML in ' .. source.file.path
+                windower.console.write('[XIVCrossbar] ' .. message)
+                return nil, message
+            end
+            parsed_sources[index] = contents
+        end
+    end
+
     self:reset_hotbar()
     local newly_created = false
 
     -- if normal hotbar file exists, load it. If not, create a default hotbar
-    if storage.file:exists() then
-        windower.console.write('[XIVCrossbar] Load crossbar sets for ' .. storage.filename)
-        self:load_from_file(storage.file)
+    if parsed_sources[1] ~= nil then
+        windower.console.write(sources[1].message)
+        self:load_from_file(storage.file, parsed_sources[1])
     elseif self.auto_create_xml then
         newly_created = true
         self:create_default_hotbar()
     end
 
     -- if job default file exists, load it. If not, create a default version
-    if storage.job_default_file:exists() then
-        windower.console.write('[XIVCrossbar] Load cross-subjob fallback crossbar set for ' .. player.main_job)
-        self:load_from_file(storage.job_default_file)
+    if parsed_sources[2] ~= nil then
+        windower.console.write(sources[2].message)
+        self:load_from_file(storage.job_default_file, parsed_sources[2])
     elseif self.auto_create_xml then
         newly_created = true
         self:create_job_default_hotbar()
     end
 
     -- if all jobs file exists, load it. If not, create a default version
-    if storage.all_jobs_file:exists() then
-        windower.console.write('[XIVCrossbar] Load cross-job fallback crossbar set')
-        self:load_from_file(storage.all_jobs_file)
+    if parsed_sources[3] ~= nil then
+        windower.console.write(sources[3].message)
+        self:load_from_file(storage.all_jobs_file, parsed_sources[3])
     elseif self.auto_create_xml then
         newly_created = true
         self:create_all_jobs_default_hotbar()
     end
 
     if (newly_created) then
-        player:store_new_hotbars()
+        local saved, save_error = player:store_new_hotbars()
+        if not saved then
+            windower.console.write('[XIVCrossbar] Unable to create hotbar files: ' .. tostring(save_error))
+            return nil, save_error
+        end
     end
+
+    return true
 end
 
 function kebab_casify(str)
@@ -173,12 +208,20 @@ function kebab_casify(str)
 end
 
 -- load a hotbar from existing file
-function player:load_from_file(storage_file)
-    local contents = xml.read(storage_file)
+function player:load_from_file(storage_file, contents)
+    if contents == nil then
+        local succeeded, parsed, read_error = pcall(xml.read, storage_file)
+        if not succeeded then
+            return nil, tostring(parsed)
+        elseif parsed == nil then
+            return nil, tostring(read_error)
+        end
+        contents = parsed
+    end
 
-    if contents.name ~= 'hotbar' then
+    if contents == nil or contents.name ~= 'hotbar' then
         windower.console.write('XIVCROSSBAR: invalid hotbar on ' .. storage.filename)
-        return
+        return nil, 'Invalid hotbar XML in ' .. storage_file.path
     end
 
     -- parse xml to hotbar
@@ -236,6 +279,8 @@ function player:load_from_file(storage_file)
             end
         end
     end
+
+    return true
 end
 
 -- create a default hotbar
@@ -273,7 +318,7 @@ function player:store_new_hotbars()
     local new_hotbar = {}
     new_hotbar.hotbar = self.hotbar
 
-    storage:store_new_hotbar(new_hotbar)
+    return storage:store_new_hotbar(new_hotbar)
 end
 
 -- reset player hotbar
@@ -336,7 +381,7 @@ end
 -- add given action to a hotbar
 function player:add_action(action, environment, hotbar, slot)
     if environment == nil or environment == '' then
-        return
+        return false
     end
 
     if environment == 'b' then environment = 'battle' elseif environment == 'f' then environment = 'field' end
@@ -344,7 +389,7 @@ function player:add_action(action, environment, hotbar, slot)
 
     local env_key = kebab_casify(environment)
     if (env_key == nil) then
-        return
+        return false
     end
 
     if self.hotbar[env_key] == nil then
@@ -355,7 +400,7 @@ function player:add_action(action, environment, hotbar, slot)
 
     if self.hotbar[env_key]['hotbar_' .. hotbar] == nil then
         windower.console.write('XIVCROSSBAR: invalid hotbar (hotbar number)')
-        return
+        return false
     end
 
     if self.hotbar[env_key]['hotbar_' .. hotbar]['slot_' .. slot] == nil then
@@ -363,6 +408,7 @@ function player:add_action(action, environment, hotbar, slot)
     end
 
     self.hotbar[env_key]['hotbar_' .. hotbar]['slot_' .. slot] = action
+    return true
 end
 
 function create_send_command_coroutine(command)
@@ -536,7 +582,7 @@ function player:save_hotbar()
     local new_hotbar = {}
     new_hotbar.hotbar = self.hotbar
 
-    storage:save_hotbar(new_hotbar)
+    return storage:save_hotbar(new_hotbar)
 end
 
 return player

@@ -27,10 +27,98 @@
 ]]
 
 local storage = {}
+local file_transaction = require('file_transaction')
+local split_hotbar
 
 storage.filename = ''
 storage.directory = ''
 storage.file = nil
+
+local filesystem = {}
+
+function filesystem.exists(path)
+    return windower.file_exists(path)
+end
+
+function filesystem.read(path)
+    local handle, open_error = io.open(path, 'rb')
+    if handle == nil then
+        return nil, open_error
+    end
+
+    local content, read_error = handle:read('*all')
+    handle:close()
+    return content, read_error
+end
+
+function filesystem.write(path, content)
+    local handle, open_error = io.open(path, 'wb')
+    if handle == nil then
+        return nil, open_error
+    end
+
+    local wrote, write_error = handle:write(content)
+    if wrote == nil then
+        handle:close()
+        return nil, write_error
+    end
+
+    local flushed, flush_error = handle:flush()
+    local closed, close_error = handle:close()
+    if flushed == nil then
+        return nil, flush_error
+    end
+    if closed == nil then
+        return nil, close_error
+    end
+
+    return true
+end
+
+
+function filesystem.remove(path)
+    if not filesystem.exists(path) then
+        return true
+    end
+    return os.remove(path)
+end
+
+
+function filesystem.rename(source, destination)
+    return os.rename(source, destination)
+end
+
+
+local function serialize_hotbars(new_hotbar)
+    local job_sub_hotbar, job_hotbar, all_jobs_hotbar = split_hotbar(new_hotbar)
+    local serialized = {}
+    local hotbars = {job_sub_hotbar, job_hotbar, all_jobs_hotbar}
+
+    for index, hotbar in ipairs(hotbars) do
+        local succeeded, content = pcall(table.to_xml, hotbar)
+        if not succeeded then
+            return nil, 'Unable to serialize hotbar XML: ' .. tostring(content)
+        end
+        serialized[index] = content
+    end
+
+    return serialized
+end
+
+
+local function write_hotbars(new_hotbar)
+    local serialized, serialize_error = serialize_hotbars(new_hotbar)
+    if serialized == nil then
+        return nil, serialize_error
+    end
+
+    local addon_path = windower.addon_path
+    return file_transaction.write({
+        {path = addon_path .. storage.file.path, content = serialized[1]},
+        {path = addon_path .. storage.job_default_file.path, content = serialized[2]},
+        {path = addon_path .. storage.all_jobs_file.path, content = serialized[3]},
+    }, filesystem)
+end
 
 -- setup storage for current player
 function storage:setup(player)
@@ -74,13 +162,8 @@ end
 
 -- store an hotbar in a new file
 function storage:store_new_hotbar(new_hotbar)
-    self.file:create()
-
-    local job_sub_hotbar, job_hotbar, all_jobs_hotbar = split_hotbar(new_hotbar)
-
-    self.file:write(table.to_xml(job_sub_hotbar))
-    self.job_default_file:write(table.to_xml(job_hotbar))
-    self.all_jobs_file:write(table.to_xml(all_jobs_hotbar))
+    self.file:create_path()
+    return write_hotbars(new_hotbar)
 end
 
 -- update filename according to jobs
@@ -94,15 +177,10 @@ end
 -- update file with hotbar
 function storage:save_hotbar(new_hotbar)
     if not self.file:exists() then
-        error('Hotbar file could not be found!')
-        return
+        return nil, 'Hotbar file could not be found: ' .. self.file.path
     end
 
-    local job_sub_hotbar, job_hotbar, all_jobs_hotbar = split_hotbar(new_hotbar)
-
-    self.file:write(table.to_xml(job_sub_hotbar))
-    self.job_default_file:write(table.to_xml(job_hotbar))
-    self.all_jobs_file:write(table.to_xml(all_jobs_hotbar))
+    return write_hotbars(new_hotbar)
 end
 
 return storage

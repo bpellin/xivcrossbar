@@ -925,13 +925,19 @@ function action_binder:display_button_confirmer()
 end
 
 function action_binder:assign_action()
-    self.save_binding(self.active_crossbar, self.hotkey, prefix_lookup[self.action_type], self.action_name, self.action_target, self.action_command, self.action_icon)
+    local saved = self.save_binding(self.active_crossbar, self.hotkey, prefix_lookup[self.action_type], self.action_name, self.action_target, self.action_command, self.action_icon)
+    if saved == false then
+        return
+    end
     self:hide()
     self:reset_state()
 end
 
 function action_binder:delete_action()
-    self.delete_binding(self.active_crossbar, self.hotkey, prefix_lookup[self.action_type], self.action_name, self.action_target)
+    local saved = self.delete_binding(self.active_crossbar, self.hotkey, prefix_lookup[self.action_type], self.action_name, self.action_target)
+    if saved == false then
+        return
+    end
     self:hide()
     self:reset_state()
 end

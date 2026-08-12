@@ -98,6 +98,7 @@ end
 -- command to set a crossbar action in action_binder
 function set_hotkey(hotbar, slot, action_type, action, target, command, icon)
     local environment = player.hotbar_settings.active_environment
+    local hotbar_before_change = table.copy(player.hotbar)
 
     local alias = nil
     if (action == 'Ranged Attack') then
@@ -125,20 +126,37 @@ function set_hotkey(hotbar, slot, action_type, action, target, command, icon)
     end
 
     local new_action = action_manager:build(action_type, action, target, alias, icon)
-    player:add_action(new_action, environment, hotbar, slot)
-    player:save_hotbar()
-    reload_hotbar()
+    if not player:add_action(new_action, environment, hotbar, slot) then
+        windower.console.write('[XIVCrossbar] Binding was not saved because the selected hotbar is unavailable.')
+        return false
+    end
+
+    local saved, save_error = player:save_hotbar()
+    if not saved then
+        player.hotbar = hotbar_before_change
+        windower.console.write('[XIVCrossbar] Unable to save binding: ' .. tostring(save_error))
+        return false
+    end
+
     set_active_environment(environment)
+    return true
 end
 
 -- command to set a crossbar action in action_binder
 function delete_hotkey(hotbar, slot)
     local environment = player.hotbar_settings.active_environment
+    local hotbar_before_change = table.copy(player.hotbar)
 
     player:remove_action(environment, hotbar, slot)
-    player:save_hotbar()
-    reload_hotbar()
+    local saved, save_error = player:save_hotbar()
+    if not saved then
+        player.hotbar = hotbar_before_change
+        windower.console.write('[XIVCrossbar] Unable to remove binding: ' .. tostring(save_error))
+        return false
+    end
+
     set_active_environment(environment)
+    return true
 end
 
 function get_crossbar_sets()
@@ -239,8 +257,27 @@ end
 
 -- reload hotbar
 function reload_hotbar()
-    player:load_hotbar()
+    local loaded, load_error = player:load_hotbar()
+    if not loaded then
+        windower.console.write('[XIVCrossbar] Reload aborted; current hotbars were preserved: ' .. tostring(load_error))
+        return false
+    end
     ui:load_player_hotbar(player.hotbar, player.vitals, player.hotbar_settings.active_environment, gamepad_state)
+    return true
+end
+
+local function save_hotbar_or_report(operation, hotbar_before_change)
+    local saved, save_error = player:save_hotbar()
+    if not saved then
+        if hotbar_before_change ~= nil then
+            player.hotbar = hotbar_before_change
+        end
+        windower.console.write('[XIVCrossbar] Unable to ' .. operation .. ': ' .. tostring(save_error))
+        return false
+    end
+
+    ui:load_player_hotbar(player.hotbar, player.vitals, player.hotbar_settings.active_environment, gamepad_state)
+    return true
 end
 
 -- change active hotbar
@@ -306,9 +343,12 @@ function set_action_command(args)
     if target ~= nil then target = target:lower() end
 
     local new_action = action_manager:build(action_type, action, target, alias, icon)
-    player:add_action(new_action, environment, hotbar, slot)
-    player:save_hotbar()
-    reload_hotbar()
+    local hotbar_before_change = table.copy(player.hotbar)
+    if not player:add_action(new_action, environment, hotbar, slot) then
+        print('XIVCROSSBAR: Unable to set action because the selected hotbar is unavailable.')
+        return
+    end
+    save_hotbar_or_report('save action', hotbar_before_change)
 end
 
 -- command to delete an action from an hotbar
@@ -332,9 +372,9 @@ function delete_action_command(args)
         return
     end
 
+    local hotbar_before_change = table.copy(player.hotbar)
     player:remove_action(environment, hotbar, slot)
-    player:save_hotbar()
-    reload_hotbar()
+    save_hotbar_or_report('remove action', hotbar_before_change)
 end
 
 -- command to copy an action to another slot
@@ -364,9 +404,9 @@ function copy_action_command(args, is_moving)
         return
     end
 
+    local hotbar_before_change = table.copy(player.hotbar)
     player:copy_action(environment, hotbar, slot, to_environment, to_hotbar, to_slot, is_moving)
-    player:save_hotbar()
-    reload_hotbar()
+    save_hotbar_or_report(command .. ' action', hotbar_before_change)
 end
 
 -- command to update action alias
@@ -391,9 +431,9 @@ function update_alias_command(args)
         return
     end
 
+    local hotbar_before_change = table.copy(player.hotbar)
     player:set_action_alias(environment, hotbar, slot, alias)
-    player:save_hotbar()
-    reload_hotbar()
+    save_hotbar_or_report('update action alias', hotbar_before_change)
 end
 
 -- command to update action icon
@@ -418,9 +458,9 @@ function update_icon_command(args)
         return
     end
 
+    local hotbar_before_change = table.copy(player.hotbar)
     player:set_action_icon(environment, hotbar, slot, icon)
-    player:save_hotbar()
-    reload_hotbar()
+    save_hotbar_or_report('update action icon', hotbar_before_change)
 end
 
 -- command to update action icon
@@ -438,9 +478,11 @@ function new_environment_command(args)
         return
     end
 
+    local hotbar_before_change = table.copy(player.hotbar)
     player:create_new_environment(environment)
-    player:save_hotbar()
-    reload_hotbar()
+    if not save_hotbar_or_report('create crossbar set', hotbar_before_change) then
+        return
+    end
     set_active_environment(environment)
 end
 
