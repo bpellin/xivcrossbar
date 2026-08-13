@@ -866,11 +866,11 @@ windower.register_event('keyboard', function(dik, pressed, flags, blocked)
         end
     end
 
-    if (gamepad_state.capturing and gamepad.is_plus(dik)) then
-        if (pressed) then
+    if (gamepad.is_plus(dik)) then
+        if (pressed and gamepad_state.capturing) then
             local environments = env_chooser:get_player_environments(player.hotbar)
             env_chooser:show_player_environments(player.hotbar, player.hotbar_settings.active_environment)
-        else
+        elseif (not pressed and env_chooser:is_showing()) then
             env_chooser:hide_player_environments()
         end
     end
